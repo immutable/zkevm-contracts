@@ -1,21 +1,18 @@
 // Copyright (c) Immutable Pty Ltd 2018 - 2023
 // SPDX-License-Identifier: Apache-2
-pragma solidity 0.8.17;
+// solhint-disable compiler-version
+// slither-disable-start missing-inheritance
+pragma solidity ^0.8.17;
 
-import {
-    ZoneParameters,
-    Schema,
-    ReceivedItem
-} from "seaport-types/src/lib/ConsiderationStructs.sol";
-import { ZoneInterface } from "seaport/contracts/interfaces/ZoneInterface.sol";
-import { SIP7Interface } from "./interfaces/SIP7Interface.sol";
-import { SIP7EventsAndErrors } from "./interfaces/SIP7EventsAndErrors.sol";
-import { SIP6EventsAndErrors } from "./interfaces/SIP6EventsAndErrors.sol";
-import { SIP5Interface } from "./interfaces/SIP5Interface.sol";
-import { Ownable2Step } from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import { Strings } from "@openzeppelin/contracts/utils/Strings.sol";
-import { ERC165 } from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import {ZoneParameters, Schema, ReceivedItem} from "seaport-types/src/lib/ConsiderationStructs.sol";
+import {ZoneInterface} from "seaport/contracts/interfaces/ZoneInterface.sol";
+import {SIP7Interface} from "./interfaces/SIP7Interface.sol";
+import {SIP7EventsAndErrors} from "./interfaces/SIP7EventsAndErrors.sol";
+import {SIP6EventsAndErrors} from "./interfaces/SIP6EventsAndErrors.sol";
+import {SIP5Interface} from "./interfaces/SIP5Interface.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 
 /**
  * @title  ImmutableSignedZone
@@ -40,7 +37,7 @@ contract ImmutableSignedZone is
     ZoneInterface,
     SIP5Interface,
     SIP7Interface,
-    Ownable2Step
+    Ownable
 {
     /// @dev The EIP-712 digest parameters.
     bytes32 internal immutable _VERSION_HASH = keccak256(bytes("1.0"));
@@ -82,8 +79,7 @@ contract ImmutableSignedZone is
             ")"
         );
 
-    bytes32 internal constant RECEIVED_ITEM_TYPEHASH =
-        keccak256(RECEIVED_ITEM_BYTES);
+    bytes32 internal constant RECEIVED_ITEM_TYPEHASH = keccak256(RECEIVED_ITEM_BYTES);
 
     bytes32 internal constant CONSIDERATION_TYPEHASH =
         keccak256(abi.encodePacked(CONSIDERATION_BYTES, RECEIVED_ITEM_BYTES));
@@ -93,11 +89,16 @@ contract ImmutableSignedZone is
     uint8 internal immutable _ACCEPTED_SIP6_VERSION = 0;
 
     /// @dev The name for this zone returned in getSeaportMetadata().
+    // solhint-disable-next-line var-name-mixedcase
     string private _ZONE_NAME;
 
+    // slither-disable-start immutable-states
+    // solhint-disable-next-line var-name-mixedcase
     bytes32 internal _NAME_HASH;
+    // slither-disable-end immutable-states
 
     /// @dev The allowed signers.
+    // solhint-disable-next-line named-parameters-mapping
     mapping(address => SignerInfo) private _signers;
 
     /// @dev The API endpoint where orders for this zone can be signed.
@@ -115,12 +116,10 @@ contract ImmutableSignedZone is
      * @param apiEndpoint The API endpoint where orders for this zone can be
      *                    signed.
      *                    Request and response payloads are defined in SIP-7.
+     * @param owner       The address of the owner of this contract. Specified in the
+     *                    constructor to be CREATE2 / CREATE3 compatible.
      */
-    constructor(
-        string memory zoneName,
-        string memory apiEndpoint,
-        string memory documentationURI
-    ) {
+    constructor(string memory zoneName, string memory apiEndpoint, string memory documentationURI, address owner) {
         // Set the zone name.
         _ZONE_NAME = zoneName;
         // set name hash
@@ -135,6 +134,9 @@ contract ImmutableSignedZone is
 
         // Emit an event to signal a SIP-5 contract has been deployed.
         emit SeaportCompatibleContractDeployed();
+
+        // Transfer ownership to the address specified in the constructor
+        _transferOwnership(owner);
     }
 
     /**
@@ -212,10 +214,7 @@ contract ImmutableSignedZone is
 
         // Revert with an error if the extraData does not have valid length.
         if (extraData.length < 93) {
-            revert InvalidExtraData(
-                "extraData length must be at least 93 bytes",
-                orderHash
-            );
+            revert InvalidExtraData("extraData length must be at least 93 bytes", orderHash);
         }
 
         // Revert if SIP6 version is not accepted (0)
@@ -238,7 +237,9 @@ contract ImmutableSignedZone is
         bytes calldata context = extraData[93:];
 
         // Revert if expired.
+        // solhint-disable-next-line not-rely-on-time
         if (block.timestamp > expiration) {
+            // solhint-disable-next-line not-rely-on-time
             revert SignatureExpired(block.timestamp, expiration, orderHash);
         }
 
@@ -248,46 +249,23 @@ contract ImmutableSignedZone is
         // Revert unless
         // Expected fulfiller is 0 address (any fulfiller) or
         // Expected fulfiller is the same as actual fulfiller
-        if (
-            expectedFulfiller != address(0) &&
-            expectedFulfiller != actualFulfiller
-        ) {
-            revert InvalidFulfiller(
-                expectedFulfiller,
-                actualFulfiller,
-                orderHash
-            );
+        if (expectedFulfiller != address(0) && expectedFulfiller != actualFulfiller) {
+            revert InvalidFulfiller(expectedFulfiller, actualFulfiller, orderHash);
         }
 
         // validate supported substandards (3,4)
-        _validateSubstandards(
-            context,
-            _deriveConsiderationHash(zoneParameters.consideration),
-            zoneParameters
-        );
+        _validateSubstandards(context, _deriveConsiderationHash(zoneParameters.consideration), zoneParameters);
 
         // Derive the signedOrder hash
-        bytes32 signedOrderHash = _deriveSignedOrderHash(
-            expectedFulfiller,
-            expiration,
-            orderHash,
-            context
-        );
+        bytes32 signedOrderHash = _deriveSignedOrderHash(expectedFulfiller, expiration, orderHash, context);
 
         // Derive the EIP-712 digest using the domain separator and signedOrder
         // hash through openzepplin helper
-        bytes32 digest = ECDSA.toTypedDataHash(
-            _domainSeparator(),
-            signedOrderHash
-        );
+        bytes32 digest = ECDSA.toTypedDataHash(_domainSeparator(), signedOrderHash);
 
         // Recover the signer address from the digest and signature.
         // Pass in R and VS from compact signature (ERC2098)
-        address recoveredSigner = ECDSA.recover(
-            digest,
-            bytes32(signature[0:32]),
-            bytes32(signature[32:64])
-        );
+        address recoveredSigner = ECDSA.recover(digest, bytes32(signature[0:32]), bytes32(signature[32:64]));
 
         // Revert if the signer is not active
         // !This also reverts if the digest constructed on serverside is incorrect
@@ -308,10 +286,7 @@ contract ImmutableSignedZone is
      * @return The domain separator.
      */
     function _domainSeparator() internal view returns (bytes32) {
-        return
-            block.chainid == _CHAIN_ID
-                ? _DOMAIN_SEPARATOR
-                : _deriveDomainSeparator();
+        return block.chainid == _CHAIN_ID ? _DOMAIN_SEPARATOR : _deriveDomainSeparator();
     }
 
     /**
@@ -334,14 +309,7 @@ contract ImmutableSignedZone is
         schemas[0].id = 7;
 
         schemas[0].metadata = abi.encode(
-            keccak256(
-                abi.encode(
-                    _domainSeparator(),
-                    _sip7APIEndpoint,
-                    _getSupportedSubstandards(),
-                    _documentationURI
-                )
-            )
+            keccak256(abi.encode(_domainSeparator(), _sip7APIEndpoint, _getSupportedSubstandards(), _documentationURI))
         );
     }
 
@@ -350,21 +318,8 @@ contract ImmutableSignedZone is
      *
      * @return domainSeparator The derived domain separator.
      */
-    function _deriveDomainSeparator()
-        internal
-        view
-        returns (bytes32 domainSeparator)
-    {
-        return
-            keccak256(
-                abi.encode(
-                    _EIP_712_DOMAIN_TYPEHASH,
-                    _NAME_HASH,
-                    _VERSION_HASH,
-                    block.chainid,
-                    address(this)
-                )
-            );
+    function _deriveDomainSeparator() internal view returns (bytes32 domainSeparator) {
+        return keccak256(abi.encode(_EIP_712_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
     }
 
     /**
@@ -372,9 +327,7 @@ contract ImmutableSignedZone is
      *
      * @param newApiEndpoint The new API endpoint.
      */
-    function updateAPIEndpoint(
-        string calldata newApiEndpoint
-    ) external override onlyOwner {
+    function updateAPIEndpoint(string calldata newApiEndpoint) external override onlyOwner {
         // Update to the new API endpoint.
         _sip7APIEndpoint = newApiEndpoint;
     }
@@ -426,11 +379,7 @@ contract ImmutableSignedZone is
         // revert if order hash in context and payload do not match
         bytes32 expectedConsiderationHash = bytes32(context[0:32]);
         if (expectedConsiderationHash != actualConsiderationHash) {
-            revert SubstandardViolation(
-                3,
-                "invalid consideration hash",
-                zoneParameters.orderHash
-            );
+            revert SubstandardViolation(3, "invalid consideration hash", zoneParameters.orderHash);
         }
 
         // substandard 4 - validate order hashes actual match expected
@@ -446,28 +395,15 @@ contract ImmutableSignedZone is
         }
 
         // compute expected order hashes array based on context bytes
-        bytes32[] memory expectedOrderHashes = new bytes32[](
-            orderHashesBytes.length / 32
-        );
+        bytes32[] memory expectedOrderHashes = new bytes32[](orderHashesBytes.length / 32);
         for (uint256 i = 0; i < orderHashesBytes.length / 32; i++) {
-            expectedOrderHashes[i] = bytes32(
-                orderHashesBytes[i * 32:i * 32 + 32]
-            );
+            expectedOrderHashes[i] = bytes32(orderHashesBytes[i * 32:i * 32 + 32]);
         }
 
         // revert if order hashes in context and payload do not match
         // every expected order hash need to exist in fulfilling order hashes
-        if (
-            !_everyElementExists(
-                expectedOrderHashes,
-                zoneParameters.orderHashes
-            )
-        ) {
-            revert SubstandardViolation(
-                4,
-                "invalid order hashes",
-                zoneParameters.orderHash
-            );
+        if (!_everyElementExists(expectedOrderHashes, zoneParameters.orderHashes)) {
+            revert SubstandardViolation(4, "invalid order hashes", zoneParameters.orderHash);
         }
     }
 
@@ -477,11 +413,7 @@ contract ImmutableSignedZone is
      * @return substandards array of substandards supported
      *
      */
-    function _getSupportedSubstandards()
-        internal
-        pure
-        returns (uint256[] memory substandards)
-    {
+    function _getSupportedSubstandards() internal pure returns (uint256[] memory substandards) {
         // support substandards 3 and 4
         substandards = new uint256[](2);
         substandards[0] = 3;
@@ -507,13 +439,7 @@ contract ImmutableSignedZone is
     ) internal view returns (bytes32 signedOrderHash) {
         // Derive the signed order hash.
         signedOrderHash = keccak256(
-            abi.encode(
-                _SIGNED_ORDER_TYPEHASH,
-                fulfiller,
-                expiration,
-                orderHash,
-                keccak256(context)
-            )
+            abi.encode(_SIGNED_ORDER_TYPEHASH, fulfiller, expiration, orderHash, keccak256(context))
         );
     }
 
@@ -521,9 +447,7 @@ contract ImmutableSignedZone is
      * @dev Derive the EIP712 consideration hash based on received item array
      * @param consideration expected consideration array
      */
-    function _deriveConsiderationHash(
-        ReceivedItem[] calldata consideration
-    ) internal pure returns (bytes32) {
+    function _deriveConsiderationHash(ReceivedItem[] calldata consideration) internal pure returns (bytes32) {
         uint256 numberOfItems = consideration.length;
         bytes32[] memory considerationHashes = new bytes32[](numberOfItems);
         for (uint256 i; i < numberOfItems; i++) {
@@ -538,13 +462,7 @@ contract ImmutableSignedZone is
                 )
             );
         }
-        return
-            keccak256(
-                abi.encode(
-                    CONSIDERATION_TYPEHASH,
-                    keccak256(abi.encodePacked(considerationHashes))
-                )
-            );
+        return keccak256(abi.encode(CONSIDERATION_TYPEHASH, keccak256(abi.encodePacked(considerationHashes))));
     }
 
     /**
@@ -554,10 +472,7 @@ contract ImmutableSignedZone is
      * @param array1 subset array
      * @param array2 superset array
      */
-    function _everyElementExists(
-        bytes32[] memory array1,
-        bytes32[] calldata array2
-    ) internal pure returns (bool) {
+    function _everyElementExists(bytes32[] memory array1, bytes32[] calldata array2) internal pure returns (bool) {
         // cache the length in memory for loop optimisation
         uint256 array1Size = array1.length;
         uint256 array2Size = array2.length;
@@ -595,11 +510,8 @@ contract ImmutableSignedZone is
         return true;
     }
 
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view override(ERC165, ZoneInterface) returns (bool) {
-        return
-            interfaceId == type(ZoneInterface).interfaceId ||
-            super.supportsInterface(interfaceId);
+    function supportsInterface(bytes4 interfaceId) public view override(ERC165, ZoneInterface) returns (bool) {
+        return interfaceId == type(ZoneInterface).interfaceId || super.supportsInterface(interfaceId);
     }
 }
+// slither-disable-end missing-inheritance
