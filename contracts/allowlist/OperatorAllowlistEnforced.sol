@@ -61,10 +61,12 @@ abstract contract OperatorAllowlistEnforced is OperatorAllowlistEnforcementError
      */
     modifier validateTransfer(address from, address to) {
         // Check for:
-        // 1. caller is an EOA
-        // 2. caller is Allowlisted or is the calling address bytecode is Allowlisted
+        // 1. caller address is different from the transaction origin address
+        // 2. caller is an EOA
+        // 3. caller is Allowlisted or the calling address bytecode is Allowlisted
         if (
             msg.sender != tx.origin && // solhint-disable-line avoid-tx-origin
+            msg.sender.code.length != 0 &&
             !operatorAllowlist.isAllowlisted(msg.sender)
         ) {
             revert CallerNotInAllowlist(msg.sender);
